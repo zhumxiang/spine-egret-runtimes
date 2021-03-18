@@ -134,6 +134,7 @@ module spine {
 		}
 
 		findRegion (name: string): TextureAtlasRegion {
+			name = name.trim();
 			for (let i = 0; i < this.regions.length; i++) {
 				if (this.regions[i].name == name) {
 					return this.regions[i];
