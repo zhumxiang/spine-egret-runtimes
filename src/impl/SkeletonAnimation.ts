@@ -1,21 +1,33 @@
 namespace spine {
     export class SkeletonAnimation extends egret.DisplayObjectContainer {
-        public readonly renderer: SkeletonRenderer;
-        public readonly state: AnimationState;
-        public readonly stateData: AnimationStateData;
-        public readonly skeleton: Skeleton;
-        public readonly skeletonData: SkeletonData;
+        public renderer: SkeletonRenderer;
+        public get state() {
+            return this.renderer.state;
+        }
+        public get stateData() {
+            return this.renderer.stateData;
+        }
+        public get skeleton() {
+            return this.renderer.skeleton;
+        }
+        public get skeletonData() {
+            return this.renderer.skeletonData;
+        }
         private lastTime: number = 0;
 
-        public constructor(skeletonData: SkeletonData) {
+        public constructor(skeletonData: SkeletonData | Promise<SkeletonData>) {
             super();
             this.renderer = new SkeletonRenderer(skeletonData);
-            this.state = this.renderer.state;
-            this.stateData = this.renderer.stateData;
-            this.skeleton = this.renderer.skeleton;
-            this.skeletonData = this.renderer.skeletonData;
             this.addChild(this.renderer);
             this.addEventListener(egret.Event.ADDED_TO_STAGE, this.onAddedToStage, this);
+        }
+
+        public loadEnsure() {
+            return this.renderer.loadEnsure().then(() => this);
+        }
+
+        public loaded() {
+            return this.renderer.skeleton != null;
         }
 
         public get flipX(): boolean {
@@ -38,12 +50,22 @@ namespace spine {
             this.state.timeScale = scale;
         }
 
-        public play(anim: string, loop = 0, trackID = 0): Track {
-            return this.start(trackID).add(anim, loop);
+        public getTimeScale() {
+            return this.state.timeScale;
+        }
+
+        public play(anim: string, loop = 0, trackID = 0, listener?: AnimationListener): Track {
+            return this.start(trackID).add(anim, loop, listener);
         }
 
         public start(trackID = 0): Track {
-            this.skeleton.setToSetupPose();
+            if (this.skeleton) {
+                this.skeleton.setToSetupPose();
+            } else {
+                this.loadEnsure().then(() => {
+                    this.skeleton.setToSetupPose();
+                });
+            }
             return new Track(this, trackID);
         }
 
@@ -71,6 +93,14 @@ namespace spine {
             let now = Date.now() / 1000;
             this.renderer.update(now - this.lastTime);
             this.lastTime = now;
+        }
+
+        public setMix(anim1: string, anim2: string, duration: number) {
+            //TODO:not impl yet
+        }
+
+        public setGLProgramState(state) {
+            //TODO:not impl yet
         }
     }
 }

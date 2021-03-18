@@ -1,4 +1,7 @@
 namespace spine {
+    export interface Attachment {
+        color?: { r: number, g: number, b: number, a: number };
+    }
     class AdapterTexture extends Texture {
         public readonly spriteSheet: egret.SpriteSheet;
 
@@ -15,23 +18,30 @@ namespace spine {
         dispose(): void { }
     }
 
-    export function createSkeletonData(jsonData: string | {}, atlas: TextureAtlas) {
+    export function createSkeletonDataWithJson(jsonData: string | {}, atlas: TextureAtlas) {
         let json = new SkeletonJson(new AtlasAttachmentLoader(atlas));
         return json.readSkeletonData(jsonData);
     }
 
-    export function createTextureAtlas(atlasData: string, textures: Record<string, egret.Texture>) {
+    export function createSkeletonDataWithBinary(binaryData: Uint8Array, atlas: TextureAtlas) {
+        let bin = new SkeletonBinary(new AtlasAttachmentLoader(atlas));
+        return bin.readSkeletonData(binaryData);
+    }
+
+    export function createTextureAtlas(atlasData: string, textures?: Record<string, egret.Texture>) {
         return new TextureAtlas(atlasData, (file: string) => {
-            return new AdapterTexture(textures[file].bitmapData);
+            let texture = textures ? textures[file] : RES.getRes(file.replace(".", "_")) as egret.Texture;
+            return new AdapterTexture(texture && texture.bitmapData);
         });
     }
 
     export class SkeletonRenderer extends egret.DisplayObjectContainer {
-        public readonly skeleton: Skeleton;
-        public readonly skeletonData: SkeletonData;
-        public readonly state: AnimationState;
-        public readonly stateData: AnimationStateData;
-        public readonly slotRenderers: SlotRenderer[] = [];
+        public skeleton: Skeleton;
+        public skeletonData: SkeletonData;
+        private skeletonDataPromise: Promise<SkeletonData>;
+        public state: AnimationState;
+        public stateData: AnimationStateData;
+        public slotRenderers: SlotRenderer[] = [];
         private colored: boolean = false;
 
         static vertices = Utils.newFloatArray(8 * 1024);
@@ -39,15 +49,28 @@ namespace spine {
         static VERTEX_SIZE = 2 + 2 + 4;
         static clipper: SkeletonClipping = new SkeletonClipping();
 
-        public constructor(skeletonData: SkeletonData) {
+        public constructor(skeletonData: SkeletonData | Promise<SkeletonData>) {
             super();
-            this.skeletonData = skeletonData;
+            if (skeletonData instanceof SkeletonData) {
+                this.skeletonData = skeletonData;
+                this.init();
+            } else {
+                this.skeletonDataPromise = skeletonData;
+                this.skeletonDataPromise.then(data => {
+                    this.skeletonData = data;
+                    this.init();
+                });
+            }
             this.stateData = new AnimationStateData(skeletonData);
             this.state = new AnimationState(this.stateData);
-            this.skeleton = new Skeleton(skeletonData);
-            this.skeleton.updateWorldTransform();
             this.touchEnabled = true;
             this.scaleY = -1;
+            SkeletonRenderer.clipper.clipEnd();
+        }
+
+        private init() {
+            this.skeleton = new Skeleton(this.skeletonData);
+            this.skeleton.updateWorldTransform();
 
             for (let slot of this.skeleton.slots) {
                 let renderer = new SlotRenderer();
@@ -57,9 +80,15 @@ namespace spine {
                 this.addChild(renderer);
                 renderer.renderSlot(slot, this.skeleton, this.colored);
                 this.colored = renderer.colored;
-
             }
-            SkeletonRenderer.clipper.clipEnd();
+        }
+
+        public loadEnsure() {
+            if (this.skeletonData) {
+                return Promise.resolve(this);
+            } else {
+                return this.skeletonDataPromise.then(() => this);
+            }
         }
 
         public findSlotRenderer(name: string): SlotRenderer {
@@ -67,6 +96,9 @@ namespace spine {
         }
 
         public update(dt: number) {
+            if (!this.skeletonData) {
+                return;
+            }
             this.state.update(dt);
             this.state.apply(this.skeleton);
             this.skeleton.updateWorldTransform();
@@ -166,10 +198,6 @@ namespace spine {
                     skeletonColor.b * slotColor.b * attachmentColor.b,
                     alpha);
 
-                if (color.r != 1 || color.g != 1 || color.b != 1 || color.a != 1) {
-                    this.alpha = color.a
-                }
-
                 let npos = []
                 let nuvs = []
                 let ncolors = []
@@ -181,7 +209,7 @@ namespace spine {
                 let finalIndices = triangles
                 let finalVertices = vertices
                 if (clipper.isClipping()) {
-                    console.log("isClipping == ",attachment.name)
+                    console.log("isClipping == ", attachment.name)
                     finalVerticesLength = clipper.clippedVertices.length
                     finalIndicesLength = clipper.clippedTriangles.length
                     finalIndices = clipper.clippedTriangles
@@ -249,19 +277,8 @@ namespace spine {
             //color.clamp()
             meshObj.texture = texture
 
-            
-            //使用 filters drawcall 很高
-            if (color.r != 1 || color.g != 1 || color.b != 1 || color.a != 1) {
-
-                var colorMatrix = [
-                    color.r, 0, 0, 0, 0,
-                    0, color.g, 0, 0, 0,
-                    0, 0, color.b, 0, 0,
-                    0, 0, 0, color.a, 0
-                ];
-                var colorFlilter = new egret.ColorMatrixFilter(colorMatrix);
-                meshObj.filters = [colorFlilter];
-            }
+            meshObj.tint = (color.r * 255 << 16) | (color.g * 255 << 8) | (color.b * 255);
+            meshObj.alpha = color.a;
 
             // let hex = this.colorHex(color)
             // console.log("hex=", hex)

@@ -115,9 +115,11 @@ namespace spine {
                     if (listener.custom) this.on(SpineEvent.Custom, listener.custom, listener);
                 }
                 this.loop = 0;
-                this.setAnimation(name, false);
-                this.emit(SpineEvent.PlayStart);
-                this.emit(SpineEvent.LoopStart);
+                this.skelAnimation.loadEnsure().then(() => {
+                    this.setAnimation(name, false);
+                    this.emit(SpineEvent.PlayStart);
+                    this.emit(SpineEvent.LoopStart);
+                });
             }
         }
 

@@ -30,33 +30,51 @@
 module spine {
 	export class AnimationStateData {
 		skeletonData: SkeletonData;
-		animationToMixTime: Map<number> = { };
+		skeletonDataPromise: Promise<SkeletonData>;
+		animationToMixTime: Map<number> = {};
 		defaultMix = 0;
 
-		constructor (skeletonData: SkeletonData) {
+		constructor(skeletonData: SkeletonData | Promise<SkeletonData>) {
 			if (skeletonData == null) throw new Error("skeletonData cannot be null.");
-			this.skeletonData = skeletonData;
+			if (skeletonData instanceof SkeletonData) {
+				this.skeletonData = skeletonData;
+			} else {
+				this.skeletonDataPromise = skeletonData;
+				this.skeletonDataPromise.then(data => {
+					this.skeletonData = data;
+				});
+			}
 		}
 
-		setMix (fromName: string, toName: string, duration: number) {
-			let from = this.skeletonData.findAnimation(fromName);
-			if (from == null) throw new Error("Animation not found: " + fromName);
-			let to = this.skeletonData.findAnimation(toName);
-			if (to == null) throw new Error("Animation not found: " + toName);
-			this.setMixWith(from, to, duration);
+		setMix(fromName: string, toName: string, duration: number) {
+			this.loadEnsure().then(() => {
+				let from = this.skeletonData.findAnimation(fromName);
+				if (from == null) throw new Error("Animation not found: " + fromName);
+				let to = this.skeletonData.findAnimation(toName);
+				if (to == null) throw new Error("Animation not found: " + toName);
+				this.setMixWith(from, to, duration);
+			});
 		}
 
-		setMixWith (from: Animation, to: Animation, duration: number) {
+		setMixWith(from: Animation, to: Animation, duration: number) {
 			if (from == null) throw new Error("from cannot be null.");
 			if (to == null) throw new Error("to cannot be null.");
 			let key = from.name + "." + to.name;
 			this.animationToMixTime[key] = duration;
 		}
 
-		getMix (from: Animation, to: Animation) {
+		getMix(from: Animation, to: Animation) {
 			let key = from.name + "." + to.name;
 			let value = this.animationToMixTime[key];
 			return value === undefined ? this.defaultMix : value;
+		}
+
+		loadEnsure() {
+			if (this.skeletonData) {
+				return Promise.resolve(this);
+			} else {
+				return this.skeletonDataPromise.then(() => this);
+			}
 		}
 	}
 }
