@@ -367,7 +367,7 @@ module spine {
 			if (entry.loop)
 				complete = duration == 0 || trackLastWrapped > entry.trackTime % duration;
 			else
-				complete = animationTime >= animationEnd && entry.animationLast < animationEnd;
+				complete = animationTime > 0 && animationTime >= animationEnd && entry.animationLast < animationEnd;
 			if (complete) this.queue.complete(entry);
 
 			// Queue events after complete.
