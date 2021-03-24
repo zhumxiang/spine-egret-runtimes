@@ -35,6 +35,9 @@ namespace spine {
         });
     }
     const clipper = new SkeletonClipping();
+    const QUAD_TRIANGLES = [0, 1, 2, 2, 3, 0];
+    const VERTEX_SIZE = 2 + 2 + 4;
+    const shareVertices = Utils.newFloatArray(8 * 1024);
     export class SkeletonRenderer extends egret.DisplayObjectContainer {
         public skeleton: Skeleton;
         public skeletonData: SkeletonData;
@@ -42,10 +45,6 @@ namespace spine {
         public state: AnimationState;
         public stateData: AnimationStateData;
         public slotRenderers: SlotRenderer[] = [];
-
-        static vertices = Utils.newFloatArray(8 * 1024);
-        static QUAD_TRIANGLES = [0, 1, 2, 2, 3, 0];
-        static VERTEX_SIZE = 2 + 2 + 4;
 
         public constructor(skeletonData: SkeletonData | Promise<SkeletonData>) {
             super();
@@ -70,12 +69,12 @@ namespace spine {
             this.skeleton.updateWorldTransform();
 
             for (let slot of this.skeleton.slots) {
-                let renderer = new SlotRenderer();
+                let renderer = new SlotRenderer(slot);
 
                 renderer.name = slot.data.name;
                 this.slotRenderers.push(renderer);
                 this.addChild(renderer);
-                renderer.renderSlot(slot);
+                renderer.renderSlot();
             }
             clipper.clipEnd();
         }
@@ -101,41 +100,67 @@ namespace spine {
             this.skeleton.updateWorldTransform();
 
             let drawOrder = this.skeleton.drawOrder;
-            let slots = this.skeleton.slots;
-
             for (let i = 0; i < drawOrder.length; i++) {
                 let slot = drawOrder[i].data.index;
                 this.setChildIndex(this.slotRenderers[slot], i);
             }
-            for (let i = 0; i < slots.length; i++) {
-                let renderer = this.slotRenderers[i];
-
-                renderer.renderSlot(slots[i]);
+            for (let renderer of this.slotRenderers) {
+                renderer.renderSlot();
             }
             clipper.clipEnd();
         }
     }
 
-    export class SlotRenderer extends egret.DisplayObjectContainer {
-        public colored: boolean = false;
-        private currentMesh: egret.DisplayObject;
-        private tempColor = new Color();
+    const tempColor = new Color();
+    function getRegionTexture(region: TextureAtlasRegion) {
+        let sheet = (region.texture as AdapterTexture).spriteSheet;
+        return sheet.$texture
+    }
+    const enum AttachmentType {
+        None,
+        Region,
+        Mesh,
+        Clip,
+    }
+    export class SlotRenderer extends egret.Mesh {
+        private attachment: Attachment;
+        private attachmentType = AttachmentType.None;
+        private uvs: number[];
+        private vertices: number[];
+        private indices: number[];
 
-        public constructor() {
+        public constructor(readonly slot: Slot) {
             super();
-            this.currentMesh = new egret.Mesh()
-            this.addChild(this.currentMesh)
+            let meshNode = this.$renderNode as egret.sys.MeshNode;
+            this.uvs = meshNode.uvs;
+            this.vertices = meshNode.vertices;
+            this.indices = meshNode.indices;
         }
 
-        public getRegionTexture(region: TextureAtlasRegion) {
-            let sheet = (region.texture as AdapterTexture).spriteSheet;
-            return sheet.$texture
+        resetAttachment(attachment: Attachment) {
+            if (attachment == this.attachment) {
+                return;
+            }
+            this.attachment = attachment;
+            let attachmentType = AttachmentType.None;
+            this.visible = false;
+            if (attachment instanceof RegionAttachment) {
+                attachmentType = AttachmentType.Region;
+                this.visible = true;
+            } else if (attachment instanceof MeshAttachment) {
+                attachmentType = AttachmentType.Mesh;
+                this.visible = true;
+            } else if (attachment instanceof ClippingAttachment) {
+                attachmentType = AttachmentType.Clip;
+            }
+            this.attachmentType = attachmentType;
         }
 
-        public renderSlot(slot: Slot) {
+        public renderSlot() {
+            let slot = this.slot;
             let attachment = slot.getAttachment();
+            this.resetAttachment(attachment);
             let texture: egret.Texture = null;
-            let region: TextureAtlasRegion = null;
 
             let numFloats = 0;
 
@@ -145,38 +170,31 @@ namespace spine {
                 this.blendMode = egret.BlendMode.NORMAL;
             }
 
-            let vertices: ArrayLike<number> = SkeletonRenderer.vertices;
+            let vertices: ArrayLike<number> = shareVertices;
             let triangles: Array<number> = null;
             let uvs: ArrayLike<number>;
 
-            let attachmentColor = new Color()
-            let vertexSize = clipper.isClipping() ? 2 : SkeletonRenderer.VERTEX_SIZE;
-            if (attachment instanceof RegionAttachment) {
-                this.visible = true;
-                let regionAttachment = <RegionAttachment>attachment;
-                regionAttachment.computeWorldVertices(slot.bone, vertices, 0, vertexSize);
-                triangles = SkeletonRenderer.QUAD_TRIANGLES;
-                region = <TextureAtlasRegion>regionAttachment.region;
-                attachmentColor = attachment.color;
-                uvs = attachment.uvs;
+            let attachmentColor: Color;
+            let vertexSize = clipper.isClipping() ? 2 : VERTEX_SIZE;
+            if (this.attachmentType == AttachmentType.Region) {
+                let region = <RegionAttachment>attachment;
+                region.computeWorldVertices(slot.bone, vertices, 0, vertexSize);
+                triangles = QUAD_TRIANGLES;
+                attachmentColor = region.color;
+                uvs = region.uvs;
                 numFloats = vertexSize * 4;
-                texture = this.getRegionTexture(attachment.region as TextureAtlasRegion)
-
-            } else if (attachment instanceof MeshAttachment) {
-                this.visible = true;
+                texture = getRegionTexture(region.region as TextureAtlasRegion)
+            } else if (this.attachmentType == AttachmentType.Mesh) {
                 let mesh = <MeshAttachment>attachment;
                 mesh.computeWorldVertices(slot, 0, mesh.worldVerticesLength, vertices, 0, vertexSize);
                 triangles = mesh.triangles;
-                region = <TextureAtlasRegion>mesh.region;
-                attachmentColor = attachment.color;
-                uvs = attachment.uvs;
+                attachmentColor = mesh.color;
+                uvs = mesh.uvs;
                 numFloats = (mesh.worldVerticesLength >> 1) * vertexSize;
-                texture = this.getRegionTexture(attachment.region as TextureAtlasRegion)
-            } else if (attachment instanceof ClippingAttachment) {
-                clipper.clipStart(slot, attachment);
+                texture = getRegionTexture(mesh.region as TextureAtlasRegion)
+            } else if (this.attachmentType == AttachmentType.Clip) {
+                clipper.clipStart(slot, attachment as ClippingAttachment);
                 return;
-            } else {
-                this.visible = false;
             }
 
             if (texture != null) {
@@ -186,60 +204,53 @@ namespace spine {
                 let slotColor = slot.color;
 
                 let alpha = skeletonColor.a * slotColor.a * attachmentColor.a;
-                let color = this.tempColor;
+                let color = tempColor;
                 color.set(skeletonColor.r * slotColor.r * attachmentColor.r,
                     skeletonColor.g * slotColor.g * attachmentColor.g,
                     skeletonColor.b * slotColor.b * attachmentColor.b,
                     alpha);
 
-                let npos = []
-                let nuvs = [];
-                let nindices = []
-                let j = 0;
-
                 let finalVerticesLength = numFloats
                 let finalIndicesLength = triangles.length
                 let finalIndices = triangles
                 let finalVertices = vertices
-                if (clipper.isClipping()) {
+                let isClipping = clipper.isClipping();
+                if (isClipping) {
                     clipper.clipTriangles(vertices, numFloats, triangles, triangles.length, uvs, Color.WHITE, Color.WHITE, false);
                     finalVerticesLength = clipper.clippedVertices.length
                     finalIndicesLength = clipper.clippedTriangles.length
                     finalIndices = clipper.clippedTriangles
                     finalVertices = clipper.clippedVertices
                 } else {
+                    this.uvs.length = uvs.length;
                     for (let i = 0; i < uvs.length; ++i) {
-                        nuvs[i] = uvs[i];
+                        this.uvs[i] = uvs[i];
                     }
                 }
 
-                for (; j < finalVerticesLength;) {
-                    npos.push(finalVertices[j++]);
-                    npos.push(finalVertices[j++]);
-                    j += 4;
-                    if (finalVertices == vertices) {
-                        j += 2;
-                    } else {
-                        nuvs.push(finalVertices[j++]);
-                        nuvs.push(finalVertices[j++]);
+                this.vertices.length = this.uvs.length = finalVerticesLength / VERTEX_SIZE * 2;
+                let index = 0;
+                for (let j = 0; j < finalVerticesLength; j += VERTEX_SIZE, index += 2) {
+                    this.vertices[index] = finalVertices[j];
+                    this.vertices[index + 1] = finalVertices[j + 1];
+                    if (isClipping) {
+                        this.uvs[index] = finalVertices[j + 6];
+                        this.uvs[index + 1] = finalVertices[j + 7];
                     }
                 }
-                for (j = 0; j < finalIndicesLength; j++) {
-                    nindices.push(finalIndices[j])
+                this.indices.length = finalIndicesLength;
+                for (let j = 0; j < finalIndicesLength; j++) {
+                    this.indices[j] = finalIndices[j];
                 }
 
-                this.drawMesh(texture, nuvs, npos, nindices, color)
+                this.drawMesh(texture, color)
             }
 
             clipper.clipEndWithSlot(slot);
         }
 
-        private drawMesh(texture: egret.Texture, uvs: number[], vertices: number[], indices: number[], color: Color) {
-            let meshObj = this.currentMesh as egret.Mesh
-            const meshNode = meshObj.$renderNode as egret.sys.MeshNode;
-            meshNode.uvs = uvs
-            meshNode.vertices = vertices
-            meshNode.indices = indices
+        private drawMesh(texture: egret.Texture, color: Color) {
+            const meshNode = this.$renderNode as egret.sys.MeshNode;
 
             meshNode.image = texture.bitmapData;
 
@@ -252,12 +263,12 @@ namespace spine {
             meshNode.imageWidth = texture.$sourceWidth;
             meshNode.imageHeight = texture.$sourceHeight;
 
-            meshObj.texture = texture
+            this.texture = texture
 
-            meshObj.tint = (color.r * 255 << 16) | (color.g * 255 << 8) | (color.b * 255);
-            meshObj.alpha = color.a;
+            this.tint = (color.r * 255 << 16) | (color.g * 255 << 8) | (color.b * 255);
+            this.alpha = color.a;
 
-            meshObj.$updateVertices();
+            this.$updateVertices();
         }
     }
 }
