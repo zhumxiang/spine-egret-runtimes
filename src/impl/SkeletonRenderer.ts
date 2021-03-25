@@ -228,7 +228,10 @@ namespace spine {
                     }
                 }
 
-                this.vertices.length = this.uvs.length = finalVerticesLength / VERTEX_SIZE * 2;
+                this.vertices.length = finalVerticesLength / VERTEX_SIZE * 2;
+                if (isClipping) {
+                    this.uvs.length = this.vertices.length;
+                }
                 let index = 0;
                 for (let j = 0; j < finalVerticesLength; j += VERTEX_SIZE, index += 2) {
                     this.vertices[index] = finalVertices[j];
